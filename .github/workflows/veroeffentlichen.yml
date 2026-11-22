@@ -24,9 +24,15 @@ jobs:
           [ "$SOLL" = "$IST" ] || { echo "Prüfsumme stimmt nicht: $IST statt $SOLL"; exit 1; }
           VER=$(python3 -c "import json;print(json.load(open('latest.json'))['version'])")
           [ "v$VER" = "$TAG" ] || { echo "Version $VER passt nicht zu $TAG"; exit 1; }
-          ASSETS=("$EXE" latest.json)
+          # fester Name für den Download-Link: .../releases/latest/download/GeruestOffice-Setup.exe
+          cp "$EXE" GeruestOffice-Setup.exe
+          ASSETS=("$EXE" GeruestOffice-Setup.exe latest.json)
           [ -f latest-multi.json ] && ASSETS+=(latest-multi.json $(cat datei-multi.txt 2>/dev/null || true))
-          gh release create "$TAG" "${ASSETS[@]}" --title "GerüstOffice ${TAG#v}" --notes-file hinweise.md --latest
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" --title "GerüstOffice ${TAG#v}" --notes-file hinweise.md --latest
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Hilfszweig löschen
