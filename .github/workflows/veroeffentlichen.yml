@@ -1,0 +1,34 @@
+# Veröffentlicht eine neue Version: Ein Push auf einen Zweig "upload-v<Version>" enthält die in Teile zerlegte
+# Installationsdatei und die signierte latest.json. Die Aktion setzt die Datei zusammen, prüft die SHA-256-Prüfsumme
+# gegen latest.json, erstellt das Release und löscht den Hilfszweig wieder.
+name: Version veröffentlichen
+on:
+  push:
+    branches: ["upload-v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Zusammensetzen und prüfen
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#upload-}"
+          cd upload
+          EXE=$(cat datei.txt)
+          cat teil.* > "$EXE"
+          SOLL=$(python3 -c "import json;print(json.load(open('latest.json'))['sha256'])")
+          IST=$(sha256sum "$EXE" | cut -d' ' -f1)
+          [ "$SOLL" = "$IST" ] || { echo "Prüfsumme stimmt nicht: $IST statt $SOLL"; exit 1; }
+          VER=$(python3 -c "import json;print(json.load(open('latest.json'))['version'])")
+          [ "v$VER" = "$TAG" ] || { echo "Version $VER passt nicht zu $TAG"; exit 1; }
+          ASSETS=("$EXE" latest.json)
+          [ -f latest-multi.json ] && ASSETS+=(latest-multi.json $(cat datei-multi.txt 2>/dev/null || true))
+          gh release create "$TAG" "${ASSETS[@]}" --title "GerüstOffice ${TAG#v}" --notes-file hinweise.md --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Hilfszweig löschen
+        if: success()
+        run: git push origin --delete "$GITHUB_REF_NAME"
