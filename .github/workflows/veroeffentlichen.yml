@@ -1,6 +1,7 @@
-# Veröffentlicht eine neue Version: Ein Push auf einen Zweig "upload-v<Version>" enthält die in Teile zerlegte
-# Installationsdatei und die signierte latest.json. Die Aktion setzt die Datei zusammen, prüft die SHA-256-Prüfsumme
-# gegen latest.json, erstellt das Release und löscht den Hilfszweig wieder.
+# Veröffentlicht eine neue Version: Ein Push auf einen Zweig "upload-v<Version>" enthält die in Teile zerlegten
+# Installationsdateien (Liste in upload/dateien.txt) und die signierten Beschreibungen latest*.json.
+# Die Aktion setzt die Dateien zusammen, prüft jede SHA-256-Prüfsumme gegen die Beschreibungen, erstellt das Release
+# (oder ergänzt es) und löscht den Hilfszweig wieder.
 name: Version veröffentlichen
 on:
   push:
@@ -17,17 +18,29 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#upload-}"
           cd upload
-          EXE=$(cat datei.txt)
-          cat teil.* > "$EXE"
-          SOLL=$(python3 -c "import json;print(json.load(open('latest.json'))['sha256'])")
-          IST=$(sha256sum "$EXE" | cut -d' ' -f1)
-          [ "$SOLL" = "$IST" ] || { echo "Prüfsumme stimmt nicht: $IST statt $SOLL"; exit 1; }
-          VER=$(python3 -c "import json;print(json.load(open('latest.json'))['version'])")
-          [ "v$VER" = "$TAG" ] || { echo "Version $VER passt nicht zu $TAG"; exit 1; }
-          # fester Name für den Download-Link: .../releases/latest/download/GeruestOffice-Setup.exe
-          cp "$EXE" GeruestOffice-Setup.exe
-          ASSETS=("$EXE" GeruestOffice-Setup.exe latest.json)
-          [ -f latest-multi.json ] && ASSETS+=(latest-multi.json $(cat datei-multi.txt 2>/dev/null || true))
+          if [ -f dateien.txt ]; then LISTE=$(cat dateien.txt); else LISTE=$(cat datei.txt); fi
+          for f in $LISTE; do cat "$f".teil.* > "$f" 2>/dev/null || cat teil.* > "$f"; done
+          python3 - "$TAG" <<'PY'
+          import json, glob, hashlib, os, sys
+          tag = sys.argv[1]; n = 0
+          for j in glob.glob("latest*.json"):
+              m = json.load(open(j)); f = os.path.basename(m["url"])
+              ist = hashlib.sha256(open(f, "rb").read()).hexdigest()
+              assert ist == m["sha256"], f"Prüfsumme {f}: {ist} statt {m['sha256']}"
+              assert "v" + m["version"] == tag, f"Version {m['version']} passt nicht zu {tag}"
+              n += 1
+          assert n, "keine Beschreibung gefunden"
+          print(n, "Beschreibungen geprüft")
+          PY
+          ASSETS=(latest*.json)
+          for f in $LISTE; do
+            ASSETS+=("$f")
+            case "$f" in
+              GeruestOffice-Setup-*.exe) cp "$f" GeruestOffice-Setup.exe; ASSETS+=(GeruestOffice-Setup.exe);;
+              GeruestOffice-Mac-arm64-*.zip) cp "$f" GeruestOffice-Mac-arm64.zip; ASSETS+=(GeruestOffice-Mac-arm64.zip);;
+              GeruestOffice-Mac-x64-*.zip) cp "$f" GeruestOffice-Mac-x64.zip; ASSETS+=(GeruestOffice-Mac-x64.zip);;
+            esac
+          done
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
