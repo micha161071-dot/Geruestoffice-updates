@@ -2,14 +2,18 @@
 # Installationsdateien (Liste in upload/dateien.txt) und die signierten Beschreibungen latest*.json.
 # Die Aktion setzt die Dateien zusammen, prüft jede SHA-256-Prüfsumme gegen die Beschreibungen, erstellt das Release
 # (oder ergänzt es) und löscht den Hilfszweig wieder.
+# Liegt upload/vorab bei, wird es eine VORABVERSION: Kunden sehen sie nicht (releases/latest bleibt beim alten Stand),
+# nur der Vorab-Kanal (Release "kanal-vorab") bekommt die signierten Beschreibungen. Ein Push auf "freigabe-v<Version>"
+# macht die Vorabversion danach zum aktuellen Release für alle.
 name: Version veröffentlichen
 on:
   push:
-    branches: ["upload-v*"]
+    branches: ["upload-v*", "freigabe-v*"]
 permissions:
   contents: write
 jobs:
   release:
+    if: startsWith(github.ref_name, 'upload-')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,11 +47,34 @@ jobs:
           done
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          elif [ -f vorab ]; then
+            gh release create "$TAG" "${ASSETS[@]}" --title "GerüstOffice ${TAG#v} (Vorabversion, im Test)" --notes-file hinweise.md --prerelease
           else
             gh release create "$TAG" "${ASSETS[@]}" --title "GerüstOffice ${TAG#v}" --notes-file hinweise.md --latest
+          fi
+          if [ -f vorab ]; then
+            gh release view kanal-vorab >/dev/null 2>&1 || gh release create kanal-vorab --prerelease --title "Vorab-Kanal (nur zum Testen)" --notes "Signierte Beschreibungen der neuesten Vorabversion. Nur für Programme mit eingeschaltetem Vorab-Kanal."
+            gh release upload kanal-vorab latest*.json --clobber
           fi
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Hilfszweig löschen
         if: success()
+        run: git push origin --delete "$GITHUB_REF_NAME"
+  freigabe:
+    if: startsWith(github.ref_name, 'freigabe-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vorabversion für alle freigeben
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#freigabe-}"
+          test "$(gh release view "$TAG" --json isPrerelease --jq .isPrerelease)" = "true" || { echo "$TAG ist keine Vorabversion"; exit 1; }
+          gh release edit "$TAG" --prerelease=false --latest --title "GerüstOffice ${TAG#v}"
+          echo "$TAG ist jetzt das aktuelle Release"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Hilfszweig löschen
+        if: always()
         run: git push origin --delete "$GITHUB_REF_NAME"
